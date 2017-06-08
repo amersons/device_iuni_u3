@@ -1,0 +1,219 @@
+# Copyright (c) 2013, The Linux Foundation. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above
+#       copyright notice, this list of conditions and the following
+#       disclaimer in the documentation and/or other materials provided
+#       with the distribution.
+#     * Neither the name of The Linux Foundation nor the names of its
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+# WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+# BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+# IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#
+
+on early-init
+    mkdir /firmware 0771 system system
+    symlink /data/tombstones /tombstones
+
+on fs
+    mount_all fstab.qcom
+
+    # Keeping following partitions outside fstab file. As user may not have
+    # these partition flashed on the device. Failure to mount any partition in fstab file
+    # results in failure to launch late-start class.
+
+    wait /dev/block/bootdevice/by-name/cache
+    mount ext4 /dev/block/bootdevice/by-name/cache /cache nosuid nodev barrier=1
+
+    wait /dev/block/bootdevice/by-name/persist
+    mount ext4 /dev/block/bootdevice/by-name/persist /persist nosuid nodev barrier=1
+
+    wait /dev/block/bootdevice/by-name/modem
+    mount vfat /dev/block/bootdevice/by-name/modem /firmware ro shortname=lower,uid=1000,gid=1000,dmask=227,fmask=337
+
+on post-fs-data
+    mkdir /data/tombstones 0771 system system
+    mkdir /tombstones/modem 0771 system system
+    mkdir /tombstones/lpass 0771 system system
+    mkdir /tombstones/wcnss 0771 system system
+    mkdir /tombstones/dsps 0771 system system
+
+# import cne init file
+on post-fs
+    export LD_PRELOAD /vendor/lib/libNimsWrap.so
+
+# Allow usb charging to be disabled peristently
+on property:persist.usb.chgdisabled=1
+    write /sys/class/power_supply/battery/charging_enabled 0
+
+on property:persist.usb.chgdisabled=0
+    write /sys/class/power_supply/battery/charging_enabled 1
+
+service qrngd /system/bin/qrngd -f
+   class main
+   user root
+   group root
+
+service qseecomd /system/bin/qseecomd
+   class core
+   user root
+   group root
+
+service mpdecision /system/bin/mpdecision --no_sleep --avg_comp
+   user root
+   disabled
+
+service thermal-engine /system/bin/thermal-engine
+   class main
+   user root
+   group root
+
+service time_daemon /system/bin/time_daemon
+   class late_start
+   user root
+   group root
+
+service audiod /system/bin/audiod
+   class late_start
+   user system
+   group system
+
+service usf_tester /system/bin/usf_tester
+    user system
+    group system inet
+    disabled
+
+service usf_epos /system/bin/usf_epos
+    user system
+    group system inet
+    disabled
+
+service usf_gesture /system/bin/usf_gesture
+    user system
+    group system inet
+    disabled
+
+service usf_sync_gesture /system/bin/usf_sync_gesture
+    user system
+    group system inet
+    disabled
+
+service usf_p2p /system/bin/usf_p2p
+    user system
+    group system inet
+    disabled
+
+service usf_hovering /system/bin/usf_hovering
+    user system
+    group system inet
+    disabled
+
+service usf_proximity /system/bin/usf_proximity
+    user system
+    group system inet
+    disabled
+
+service usf-post-boot /system/bin/sh /system/etc/usf_post_boot.sh
+    class late_start
+    user root
+    disabled
+    oneshot
+
+on property:init.svc.bootanim=stopped
+    start usf-post-boot
+
+on boot
+    insmod /system/lib/modules/adsprpc.ko
+
+service mdm_helper /system/bin/mdm_helper
+    class core
+    onrestart setprop ro.service.mdm_helper_restarted "true"
+    disabled
+
+service mdm_launcher /system/bin/sh /init.mdm.sh
+    class main
+    oneshot
+
+service qcamerasvr /system/bin/mm-qcamera-daemon
+    class late_start
+    user camera
+    group camera system inet input graphics
+
+# When QCA1530 SoC presence detected
+on property:persist.qca1530=yes
+   #gpio133 on APQ8084 CDP
+   chown gps system /sys/class/gpio/gpio133/value
+   chmod 0644 /sys/class/gpio/gpio133/value
+
+   #gpio128 on APQ8084 LIQUID
+   chown gps system /sys/class/gpio/gpio128/value
+   chmod 0644 /sys/class/gpio/gpio128/value
+
+   stop gnss-detect
+   start gnss-svcd
+
+# When QCA1530 is known not to present
+on property:persist.qca1530=no
+   stop gnss-svcd
+   stop gnss-detect
+   write /sys/kernel/qca1530/chip_state 0
+
+# When QCA1530 presence detection is required
+on property:persist.qca1530=detect
+   #gpio133 on APQ8084 CDP
+   chown gps system /sys/class/gpio/gpio133/value
+   chmod 0644 /sys/class/gpio/gpio133/value
+
+   #gpio128 on APQ8084 LIQUID
+   chown gps system /sys/class/gpio/gpio128/value
+   chmod 0644 /sys/class/gpio/gpio128/value
+
+   stop gnss-svcd
+   start gnss-detect
+
+# QCA1530 SoC Detection
+# Setting property require root priviledge
+service gnss-detect /system/vendor/bin/gnss.qca1530.detect.sh
+   class late_start
+   user root
+   group root
+   oneshot
+   disabled
+
+# QCA1530 SoC Service Daemon
+service gnss-svcd /system/vendor/bin/gnss.qca1530.start.sh
+   class late_start
+   user root
+   group gps system qcom_diag diag log inet net_raw
+   disabled
+
+service ppd /system/bin/mm-pp-daemon
+    class late_start
+    user system
+    socket pps stream 0660 system system
+    group system graphics
+
+on property:init.svc.surfaceflinger=stopped
+    stop ppd
+
+#start GNSS/Sensor interface daemon
+service gsiff_daemon /system/bin/gsiff_daemon
+    class late_start
+    user gps
+    group gps net_raw misc
